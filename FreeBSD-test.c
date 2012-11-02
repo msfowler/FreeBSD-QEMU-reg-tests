@@ -30,6 +30,8 @@
 #include <netdb.h>
 #include <sys/file.h>
 #include <poll.h>
+#include <sys/sem.h>
+#include <sys/ipc.h>
 
 #define TESTPATH "/tmp/freebsd-test.tmp"
 #define TESTPORT 7654
@@ -654,38 +656,43 @@ void test_uid(void)
 
 void test_sem(void)
 {
-	int err;
-	sem_t * my_sem;
-	char name[10];
+	int semID;
+	struct sembuf sb;
+	int err, val;
 
-	strcpy(name, "/test_sem");
-	
-	my_sem = sem_open(name,(O_CREAT | O_EXCL), (S_IRUSR | S_IWUSR), 0);
+	semID = chk_error(semget(IPC_PRIVATE, 1, 0666 | IPC_CREAT));
 
-	if(my_sem == SEM_FAILED)
+	chk_error(semctl(semID, 0, SETVAL, 0));
+
+	sb.sem_num = 0;
+	sb.sem_op = -1;
+	sb.sem_flg = IPC_NOWAIT;
+
+	/* try lock, should return EAGAIN */
+
+	err = semop(semID, &sb, 1);
+
+	if(err != -1 || errno != EAGAIN)	
 	{
-		error("sem_open");
-	}
-	
-	// try to get the semaphore, should return EAGAIN
-	err = sem_trywait(my_sem);
-	if(err == -1)
-	{
-		if(errno != EAGAIN)
-		{
-			error("sem_trywait");
-		}
+		error("semop");
 	}
 
 	//post to semaphore
-	chk_error(sem_post(my_sem));
-
-	//wait on semaphore
-	chk_error(sem_wait(my_sem));
-
-	chk_error(sem_unlink(&name[0]));
-
-	chk_error(sem_close(my_sem));
+	sb.sem_op = 1;
+	sb.sem_flg = 0;
+	chk_error(semop(semID, &sb, 1));
+											
+	//check that it posted 
+	val = chk_error(semctl(semID, 0, GETVAL));
+												
+	if(val != 1)
+	{
+		error("semctl");
+	}
+												
+	//pend on the semaphore
+	sb.sem_op = 1;
+	chk_error(semop(semID, &sb, 1));;
 }
 
 void test_rlimit()
@@ -764,8 +771,6 @@ void test_rlimit()
 	rlp.rlim_cur = old_limit;
 
 	chk_error(setrlimit(RLIMIT_CPU, &rlp));
-
-
 }
 
 void test_exec()
@@ -774,9 +779,9 @@ void test_exec()
 	int status;
 
 	char bin[32];
-	char arg[32]; 
 
 	/*
+	char arg[32]; 
 	#ifndef ARCH
 		error("Architecture not defined");
 	#elif ARCH==ARCH_X86
@@ -844,7 +849,7 @@ void test_priority()
 
 	chk_error(setpriority(PRIO_PROCESS, 0, new_priority));
 
-	//chekc that it changed
+	//check that it changed
 	errno = 0;
 	my_priority = getpriority(PRIO_PROCESS, 0);
 	if(my_priority == -1 && errno != 0)
@@ -854,13 +859,10 @@ void test_priority()
 
 	if(my_priority != new_priority)
 	{
-		printf("My Priority: %d\n", my_priority);
-		printf("New Priority: %d\n", new_priority);
 		error("setpriority");	
 	}
 
 //	chk_error(setpriority(PRIO_PROCESS, 0, old_priority));
-
 }
 
 void test_socket_echo()
@@ -895,7 +897,7 @@ void test_socket_echo()
 	//now test UDP
 	sock = chk_error(socket(AF_INET, SOCK_DGRAM, 0));
 	chk_error(sendto(sock, "bar", 4, 0, res->ai_addr, res->ai_addrlen)); 
-	int len = chk_error(recvfrom(sock, buf, 4, 0, NULL, NULL)); 
+	chk_error(recvfrom(sock, buf, 4, 0, NULL, NULL)); 
 
 	if(strcmp(buf, "bar") != 0)
 	{
@@ -911,7 +913,7 @@ void test_socket_echo()
 void test_flock()
 {
 	int fd;
-	int pid, wait_pid;
+	int pid;
 	int status; 
 	char cur_dir[1024];
 
@@ -1041,6 +1043,7 @@ void test_getsetlogin()
 		error("child process exited with error");
 	}
 }
+
 
 int main(int argc, char **argv)
 { 

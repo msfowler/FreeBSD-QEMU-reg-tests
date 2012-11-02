@@ -1,4 +1,4 @@
-CFLAGS=-static
+CFLAGS=-static -Wall
 
 MIPS_CC = cc-mips64
 X86_CC = gcc
