@@ -32,6 +32,7 @@
 #include <poll.h>
 #include <sys/sem.h>
 #include <sys/ipc.h>
+#include <sys/msg.h>
 
 #define TESTPATH "/tmp/freebsd-test.tmp"
 #define TESTPORT 7654
@@ -662,7 +663,11 @@ void test_sem(void)
 
 	semID = chk_error(semget(IPC_PRIVATE, 1, 0666 | IPC_CREAT));
 
-	chk_error(semctl(semID, 0, SETVAL, 0));
+	if(semctl(semID, 0, SETVAL, 0) < 0)
+	{
+		semctl(semID, 0, IPC_RMID);
+		error("semctl"); 
+	}
 
 	sb.sem_num = 0;
 	sb.sem_op = -1;
@@ -674,16 +679,25 @@ void test_sem(void)
 
 	if(err != -1 || errno != EAGAIN)	
 	{
+		semctl(semID, 0, IPC_RMID);
 		error("semop");
 	}
 
 	//post to semaphore
 	sb.sem_op = 1;
 	sb.sem_flg = 0;
-	chk_error(semop(semID, &sb, 1));
+	if(semop(semID, &sb, 1) < 0)
+	{
+		semctl(semID, 0, IPC_RMID);
+		error("semctl"); 
+	}
 											
 	//check that it posted 
-	val = chk_error(semctl(semID, 0, GETVAL));
+	if((val = chk_error(semctl(semID, 0, GETVAL))) < 0)
+	{
+		semctl(semID, 0, IPC_RMID);
+		error("semctl");
+	}
 												
 	if(val != 1)
 	{
@@ -692,7 +706,14 @@ void test_sem(void)
 												
 	//pend on the semaphore
 	sb.sem_op = 1;
-	chk_error(semop(semID, &sb, 1));;
+	if(semop(semID, &sb, 1) < 0)
+	{
+		semctl(semID, 0, IPC_RMID);
+		error("semop");
+	}
+
+	//destroy the semaphore
+	semctl(semID, 0, IPC_RMID);
 }
 
 void test_rlimit()
@@ -764,7 +785,7 @@ void test_rlimit()
 
 	if(rlp.rlim_cur != new_limit)
 	{
-		printf("bad limit: %d\n", rlp.rlim_cur);
+		printf("bad limit: %d\n", (int)rlp.rlim_cur);
 		error("setrlimit");
 	}
 	
@@ -1044,6 +1065,98 @@ void test_getsetlogin()
 	}
 }
 
+void test_msg_queue()
+{	
+	int queueID = -1; 
+	struct msqid_ds stat_buf; 
+	
+	struct my_msgbuf {
+		long mtype;
+		char mtext[10];
+	} buf; 
+	
+
+	/* make a msg queue */
+
+	queueID = msgget(IPC_PRIVATE, (IPC_CREAT | IPC_EXCL | IPC_R | IPC_W));
+
+	if(queueID < -1)
+	{	
+		error("msgget");
+	}
+
+	/* check the stats */
+	if(msgctl(queueID, IPC_STAT, &stat_buf) < 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgctl");
+	}
+
+	if(stat_buf.msg_perm.cuid != geteuid())
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgctl IPC_STAT creator uid");
+	}
+	
+	if((stat_buf.msg_perm.mode & (IPC_R | IPC_W)) == 0)
+	{
+		msgctl(queueID, IPC_RMID, 0); 
+		error("msgctl IPC_STAT mode"); 
+	}
+
+	/* send a message */
+	strcpy(buf.mtext, "foo");
+	buf.mtype = 1; 
+	if(msgsnd(queueID, &buf, sizeof(buf.mtext), 0) < 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgsnd");
+	}
+
+	/* there should now be 1 msg in the queue */
+	if(msgctl(queueID, IPC_STAT, &stat_buf) < 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgctl");
+	}
+
+	if(stat_buf.msg_qnum != 1)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgsnd");
+	}
+
+	/* receive the msg */
+	bzero((void *) &buf, sizeof(buf));
+
+	if(msgrcv(queueID, &buf, sizeof(buf.mtext), 0, 0) < 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgrcv"); 
+	}
+
+	if(strcmp( &buf.mtext[0], "foo") != 0)
+	{
+        msgctl(queueID, IPC_RMID, NULL);
+		error("msgrcv");
+	}
+	
+    /* there should now be 1 msg in the queue */
+	if(msgctl(queueID, IPC_STAT, &stat_buf) < 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgctl");
+	}
+
+	if(stat_buf.msg_qnum != 0)
+	{
+		msgctl(queueID, IPC_RMID, NULL);
+		error("msgrcv didn't remove msg from queue");
+	}
+	
+	chk_error(msgctl(queueID, IPC_RMID, NULL));
+
+}
 
 int main(int argc, char **argv)
 { 
@@ -1062,6 +1175,8 @@ int main(int argc, char **argv)
 	test_priority();
 	test_flock();
 	test_getsetlogin();
+	test_msg_queue();
+
 
     return 0;
 }
