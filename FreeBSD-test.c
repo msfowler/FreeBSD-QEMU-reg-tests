@@ -33,6 +33,7 @@
 #include <sys/sem.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <limits.h>
 
 #define TESTPATH "/tmp/freebsd-test.tmp"
 #define TESTPORT 7654
@@ -1158,6 +1159,128 @@ void test_msg_queue()
 
 }
 
+/* tests chown, fchown, lchown, stat, fstat, lstat, symlink */ 
+void test_chown()
+{
+	int fd, fd2,  groupCount, i; 
+	gid_t	my_groups[NGROUPS_MAX]; 
+	char cur_dir[1024];	
+	struct stat my_sb; 
+	int orig_uid, orig_gid;
+	int result;
+	char buf[64];
+
+	/* create a test file */
+
+    /*clean up, just in case */
+	unlink(TESTPATH "/testchown");
+	unlink(TESTPATH "/testsymlink");
+	rmdir(TESTPATH);
+
+	if(getcwd(cur_dir, sizeof(cur_dir)) == NULL)
+		error("getcwd");
+
+	chk_error(mkdir(TESTPATH, 0755));
+	chk_error(chdir(TESTPATH));
+
+	fd = chk_error(open("testchown", (O_RDWR | O_CREAT), 0644 ));
+
+	/* get groups */
+	groupCount = chk_error(getgroups(NGROUPS_MAX, &my_groups[0])); 
+
+	if(groupCount == 0)
+		error("getgroups");
+
+	chk_error(fstat(fd, &my_sb)); 
+	orig_gid = my_sb.st_gid;
+	orig_uid = my_sb.st_uid; 
+
+	int my_new_gid1 = 0;
+
+	for ( i = 0; i < groupCount; i++ ) {
+		if ( orig_gid != my_groups[ i ] ) {
+			if ( my_new_gid1 == 0 ) {
+				my_new_gid1 = my_groups[ i ];
+			}
+		}
+	}
+	
+	// NOTE: makes sure my_new_gid != the old one. maybe use some bogus group. 
+
+	chk_error(chown("testchown", orig_uid, my_new_gid1));
+
+	/* make sure it actually worked */
+	chk_error(stat("testchown", &my_sb));
+	if(my_sb.st_gid == orig_gid)
+	{
+		error("chown");
+	}
+
+	/* test fchown */
+	chk_error(fchown(fd, orig_uid, orig_gid));
+	chk_error(fstat(fd, &my_sb));
+
+	if(my_sb.st_gid != orig_gid)
+	{
+		error("fstat or fchown"); 
+	}
+
+	/* test symlink */ 
+	chk_error(symlink("testchown", "testsymlink"));	
+	
+	result = chk_error(readlink("testsymlink", &buf[0], sizeof(buf)));
+	buf[result] = '\0';
+	
+	if(strcmp(buf, "testchown") != 0)
+	{
+		error("symlink"); 
+	}
+
+	//open the symlink, write to it, then make sure it wrote to
+	//the actual file
+	fd2 = chk_error(open("testsymlink", O_RDWR));
+	chk_error(write(fd2, "woot", 4));
+	chk_error(close(fd2));
+	
+	bzero(buf, sizeof(buf)); 
+	chk_error(read(fd, buf, 4));
+	
+	
+	if(strcmp(buf, "woot") != 0)
+	{
+		printf("<%s>\n", buf);
+		error("reading/writing to a symlink");
+	}
+	
+	/* test lchown and lstat */ 
+	chk_error(lstat("testsymlink", &my_sb));
+	orig_gid = my_sb.st_gid;
+	orig_uid = my_sb.st_uid;
+	
+	chk_error(lchown("testsymlink", orig_uid, my_new_gid1)); 
+	
+	/* make sure it actually changed */
+	chk_error(lstat("testsymlink", &my_sb));
+
+	if(my_sb.st_gid == orig_gid)
+	{
+		error("lchown");
+	}
+
+	chk_error(stat("testchown", &my_sb));
+	if(my_sb.st_gid != orig_gid)
+	{
+		error("lchown followed link");
+	}
+
+	/* clean up */
+	close(fd); 
+    unlink(TESTPATH "/testchown");
+	unlink(TESTPATH "/testsymlink");
+ 	chk_error(chdir(cur_dir));
+	rmdir(TESTPATH);
+}
+
 int main(int argc, char **argv)
 { 
 	test_file();
@@ -1176,7 +1299,6 @@ int main(int argc, char **argv)
 	test_flock();
 	test_getsetlogin();
 	test_msg_queue();
-
-
+	test_chown();
     return 0;
 }
