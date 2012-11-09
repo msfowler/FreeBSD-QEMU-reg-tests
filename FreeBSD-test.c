@@ -1281,6 +1281,56 @@ void test_chown()
 	rmdir(TESTPATH);
 }
 
+void test_fifo()
+{
+	char cur_dir[1024];
+	int pid, writefd, status; 
+
+	/*clean up, just in case */
+	unlink(TESTPATH "/testfifo");
+	rmdir(TESTPATH);
+
+	if(getcwd(cur_dir, sizeof(cur_dir)) == NULL)
+		error("getcwd");
+
+	chk_error(mkdir(TESTPATH, 0755));
+	chk_error(chdir(TESTPATH));
+
+	// create a fifo to test with 
+	chk_error(mkfifo("testfifo", (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)));
+
+	pid = chk_error(fork());
+	
+	if(pid == 0)
+	{
+		// child reads from fifo 
+		int readfd = -1;
+		char buf[32];
+
+		readfd = chk_error(open("testfifo", O_RDWR, 0));
+		bzero((void *)buf, sizeof(buf));
+		chk_error(read(readfd, buf, sizeof(buf)));
+		
+		if(strcmp("testing 1, 2, 3", buf) != 0)
+		{
+			error("read from fifo failed");
+		}
+		
+		exit(0); 
+	}
+
+	writefd = chk_error(open("testfifo", O_WRONLY, 0)); 
+	chk_error(write(writefd, "testing 1, 2, 3", 15)); 
+
+	chk_error(wait4(pid, &status, 0, NULL)); 
+
+	// clean up 
+	unlink(TESTPATH "/testfifo");
+	chk_error(chdir(cur_dir));
+	rmdir(TESTPATH);
+	
+}
+
 int main(int argc, char **argv)
 { 
 	test_file();
@@ -1300,5 +1350,7 @@ int main(int argc, char **argv)
 	test_getsetlogin();
 	test_msg_queue();
 	test_chown();
+	test_fifo(); 
+
     return 0;
 }
